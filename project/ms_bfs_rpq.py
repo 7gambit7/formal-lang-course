@@ -3,7 +3,7 @@ from networkx import MultiDiGraph
 from scipy.sparse import csr_array, eye_array, kron
 
 from project.adjacency_matrix_fa import AdjacencyMatrixFA
-from project.task2 import graph_to_nfa, regex_to_dfa
+from project.finite_automata import graph_to_nfa, regex_to_dfa
 
 
 def ms_bfs_based_rpq(
