@@ -1,7 +1,7 @@
 from networkx import MultiDiGraph
 
 from project.adjacency_matrix_fa import AdjacencyMatrixFA, intersect_automata
-from project.task2 import graph_to_nfa, regex_to_dfa
+from project.finite_automata import graph_to_nfa, regex_to_dfa
 
 
 def tensor_based_rpq(

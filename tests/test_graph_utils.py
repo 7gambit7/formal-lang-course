@@ -1,7 +1,7 @@
 import networkx as nx
 import pytest
 
-from project.task1 import (
+from project.graph_utils import (
     GraphInfo,
     build_two_cycles_graph,
     get_graph_info,
