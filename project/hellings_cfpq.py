@@ -9,35 +9,59 @@ from pyformlang.finite_automaton import NondeterministicFiniteAutomaton
 from project.finite_automata import graph_to_nfa
 
 
-def _as_variable(symbol: Variable | Terminal) -> Variable:
-    return Variable(f"[{symbol.value}]") if isinstance(symbol, Terminal) else symbol
+class _Weakener:
+    """Splits rules into weak CNF, inventing only variables absent from the grammar."""
 
+    def __init__(self, cfg: CFG) -> None:
+        self._taken: set[str] = {str(v.value) for v in cfg.variables} | {
+            str(t.value) for t in cfg.terminals
+        }
+        self._fresh: dict[tuple, Variable] = {}
 
-def _chain(lhs: Variable, symbols: list[Variable]) -> Iterator[Production]:
-    if len(symbols) <= 2:
-        yield Production(lhs, symbols)
-        return
-    suffix = Variable("<" + " ".join(str(s.value) for s in symbols[1:]) + ">")
-    yield Production(lhs, [symbols[0], suffix])
-    yield from _chain(suffix, symbols[1:])
+    def _new_variable(self, key: tuple, preferred: str) -> Variable:
+        if key not in self._fresh:
+            name = preferred
+            while name in self._taken:
+                name += "'"
+            self._taken.add(name)
+            self._fresh[key] = Variable(name)
+        return self._fresh[key]
 
+    def _as_variable(self, symbol: Variable | Terminal) -> Variable:
+        if isinstance(symbol, Terminal):
+            return self._new_variable(("term", symbol), f"[{symbol.value}]")
+        return symbol
 
-def _weaken(rule: Production) -> Iterator[Production]:
-    symbols = [s for s in rule.body if not isinstance(s, Epsilon)]
-    if len(symbols) < 2:
-        yield Production(rule.head, symbols)
-        return
-    terminals = {s for s in symbols if isinstance(s, Terminal)}
-    yield from (Production(_as_variable(t), [t]) for t in terminals)
-    yield from _chain(rule.head, [_as_variable(s) for s in symbols])
+    def _chain(self, lhs: Variable, symbols: list[Variable]) -> Iterator[Production]:
+        if len(symbols) <= 2:
+            yield Production(lhs, symbols)
+            return
+        rest = tuple(symbols[1:])
+        suffix = self._new_variable(
+            ("chain", rest), "<" + " ".join(str(s.value) for s in rest) + ">"
+        )
+        yield Production(lhs, [symbols[0], suffix])
+        yield from self._chain(suffix, symbols[1:])
+
+    def weaken(self, rule: Production) -> Iterator[Production]:
+        symbols = [s for s in rule.body if not isinstance(s, Epsilon)]
+        if len(symbols) < 2:
+            yield Production(rule.head, symbols)
+            return
+        terminals = {s for s in symbols if isinstance(s, Terminal)}
+        yield from (Production(self._as_variable(t), [t]) for t in terminals)
+        yield from self._chain(rule.head, [self._as_variable(s) for s in symbols])
 
 
 def cfg_to_weak_normal_form(cfg: CFG) -> CFG:
     without_units = cfg.eliminate_unit_productions()
+    weakener = _Weakener(without_units)
     return CFG(
         start_symbol=cfg.start_symbol,
         productions=set(
-            itertools.chain.from_iterable(map(_weaken, without_units.productions))
+            itertools.chain.from_iterable(
+                map(weakener.weaken, without_units.productions)
+            )
         ),
     )
 

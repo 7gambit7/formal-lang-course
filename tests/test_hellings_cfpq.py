@@ -1,6 +1,6 @@
 import networkx as nx
 import pytest
-from pyformlang.cfg import CFG, Epsilon, Production, Terminal
+from pyformlang.cfg import CFG, Epsilon, Production, Terminal, Variable
 
 from project.hellings_cfpq import cfg_to_weak_normal_form, hellings_based_cfpq
 
@@ -58,3 +58,70 @@ def test_weak_form_keeps_language(text: str, samples: list[str]) -> None:
 def test_hellings_on_two_cycles(text, starts, finals, expected) -> None:
     got = hellings_based_cfpq(CFG.from_text(text), graph_of(TWO_CYCLES), starts, finals)
     assert got == expected
+
+
+def test_weak_form_name_collision_regression() -> None:
+    """
+    Регрессионный тест для проверки коллизии имён.
+    Проверяет, что алгоритм не ломает язык, если в исходной грамматике
+    присутствуют нетерминалы, чьи имена совпадают с шаблонами автогенерации (например, '[a]').
+    """
+    collision_text = "S -> a a\nS -> [a]\n[a] -> b"
+    gram = CFG.from_text(collision_text)
+    wcnf = cfg_to_weak_normal_form(gram)
+
+    # Форма должна оставаться корректной
+    assert None not in {shape(rule) for rule in wcnf.productions}
+
+    # Проверяем, что язык не изменился и не генерирует лишние слова из-за пересечения имён
+    samples = ["aa", "b", "bb", "ab", "ba"]
+    assert {s: wcnf.contains(s) for s in samples} == {
+        s: gram.contains(s) for s in samples
+    }
+
+
+def test_weak_form_chain_name_collision() -> None:
+    # "<B C>" is the name the chain splitter would pick for the tail of A B C
+    s, a, b, c, tail = (Variable(n) for n in ("S", "A", "B", "C", "<B C>"))
+    gram = CFG(
+        start_symbol=s,
+        productions={
+            Production(s, [a, b, c]),
+            Production(s, [tail]),
+            Production(tail, [Terminal("d")]),
+            Production(a, [Terminal("a")]),
+            Production(b, [Terminal("b")]),
+            Production(c, [Terminal("c")]),
+        },
+    )
+    wcnf = cfg_to_weak_normal_form(gram)
+    assert None not in {shape(rule) for rule in wcnf.productions}
+    samples = ["abc", "d", "ad", "abd", "bc"]
+    assert {w: wcnf.contains(w) for w in samples} == {
+        w: gram.contains(w) for w in samples
+    }
+
+
+def test_weak_form_generated_names_do_not_collide() -> None:
+    # tails ("B C", "D") and ("B", "C D") both render as "<B C D>"
+    names = ("S", "A", "E", "B C", "D", "B", "C D")
+    s, a, e, bc, d, b, cd = (Variable(n) for n in names)
+    gram = CFG(
+        start_symbol=s,
+        productions={
+            Production(s, [a, bc, d]),
+            Production(s, [e, b, cd]),
+            Production(a, [Terminal("a")]),
+            Production(e, [Terminal("e")]),
+            Production(bc, [Terminal("x")]),
+            Production(d, [Terminal("y")]),
+            Production(b, [Terminal("p")]),
+            Production(cd, [Terminal("q")]),
+        },
+    )
+    wcnf = cfg_to_weak_normal_form(gram)
+    assert None not in {shape(rule) for rule in wcnf.productions}
+    samples = ["axy", "epq", "apq", "exy"]
+    assert {w: wcnf.contains(w) for w in samples} == {
+        w: gram.contains(w) for w in samples
+    }
