@@ -1,5 +1,4 @@
 from collections import defaultdict
-from itertools import product
 
 import networkx as nx
 from pyformlang.cfg import CFG
@@ -13,30 +12,31 @@ from pyformlang.finite_automaton import (
 from pyformlang.rsa import Box, RecursiveAutomaton
 from scipy.sparse import csr_array
 
-from project.adjacency_matrix_fa import AdjacencyMatrixFA, intersect_automata
+from project.adjacency_matrix_fa import AdjacencyMatrixFA
 from project.finite_automata import graph_to_nfa
+from project.ms_bfs_rpq import ms_bfs
 
 
 def cfg_to_rsm(cfg: CFG) -> RecursiveAutomaton:
     """Rule `A -> X Y Z` becomes the path X, Y, Z in the box of A."""
-    automata: dict[str, EpsilonNFA] = defaultdict(EpsilonNFA)
-    for i, rule in enumerate(cfg.productions):
-        enfa = automata[rule.head.value]
-        states = [State(("start",))]
-        states += [State((i, k)) for k in range(1, len(rule.body))]
-        states.append(State(("final",)))
-        enfa.add_start_state(states[0])
-        enfa.add_final_state(states[-1])
+    box_nfas: dict[str, EpsilonNFA] = defaultdict(EpsilonNFA)
+    for rule_no, rule in enumerate(cfg.productions):
+        box_nfa = box_nfas[rule.head.value]
+        path = [State("in")]
+        path += [State((rule_no, pos)) for pos in range(1, len(rule.body))]
+        path.append(State("out"))
+        box_nfa.add_start_state(path[0])
+        box_nfa.add_final_state(path[-1])
         if not rule.body:
-            enfa.add_transition(states[0], Epsilon(), states[-1])
-        for source, symbol, target in zip(states, rule.body, states[1:]):
-            enfa.add_transition(source, Symbol(symbol.value), target)
+            box_nfa.add_transition(path[0], Epsilon(), path[-1])
+        for src, sym, dst in zip(path, rule.body, path[1:]):
+            box_nfa.add_transition(src, Symbol(sym.value), dst)
 
     start = cfg.start_symbol.value if cfg.start_symbol is not None else "S"
-    automata.setdefault(start, EpsilonNFA())  # start may have no rules
+    box_nfas.setdefault(start, EpsilonNFA())  # start may have no rules
     return RecursiveAutomaton(
         initial_label=Symbol(start),
-        boxes={Box(enfa.minimize(), Symbol(head)) for head, enfa in automata.items()},
+        boxes={Box(nfa.minimize(), Symbol(head)) for head, nfa in box_nfas.items()},
     )
 
 
@@ -76,13 +76,6 @@ class _RsmMatrices:
         }
 
 
-def _graph_block(closure: csr_array, rsm_from: int, rsm_to: int, n: int) -> csr_array:
-    """Part of the closure for RSM states rsm_from -> rsm_to (graph x graph)."""
-    rows = slice(rsm_from * n, (rsm_from + 1) * n)
-    cols = slice(rsm_to * n, (rsm_to + 1) * n)
-    return closure[rows, cols]
-
-
 def tensor_based_cfpq(
     rsm: RecursiveAutomaton,
     graph: nx.DiGraph,
@@ -92,21 +85,20 @@ def tensor_based_cfpq(
     boxes = _RsmMatrices(rsm)
     graph_fa = AdjacencyMatrixFA(graph_to_nfa(graph, start_nodes, final_nodes))
     n = graph_fa.states_count
+    stride = boxes.fa.states_count
     for label in boxes.ends:
         graph_fa.matrices.setdefault(label, csr_array((n, n), dtype=bool))
 
-    # If a box goes from start to final between u and v, add edge u -box-> v.
-    # Repeat while new edges appear.
+    # BFS from every node. If a box goes from start to final between u and v,
+    # add edge u -box-> v. Repeat while new edges appear.
     changed = True
     while changed:
         changed = False
-        closure = intersect_automata(boxes.fa, graph_fa).transitive_closure()
-        for label, (starts, finals) in boxes.ends.items():
+        bfs_result = ms_bfs(graph_fa, boxes.fa, list(range(n)))
+        for label, (_, finals) in boxes.ends.items():
             known = graph_fa.matrices[label]
-            grown = sum(
-                (_graph_block(closure, s, f, n) for s, f in product(starts, finals)),
-                start=known,
-            )
+            # rows f, f + stride, ...: box final f reached from each node
+            grown = sum((bfs_result[f::stride] for f in finals), start=known)
             if grown.nnz > known.nnz:
                 graph_fa.matrices[label] = csr_array(grown, dtype=bool)
                 changed = True

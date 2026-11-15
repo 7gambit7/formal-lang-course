@@ -6,22 +6,18 @@ from project.adjacency_matrix_fa import AdjacencyMatrixFA
 from project.finite_automata import graph_to_nfa, regex_to_dfa
 
 
-def ms_bfs_based_rpq(
-    regex: str, graph: MultiDiGraph, start_nodes: set[int], final_nodes: set[int]
-) -> set[tuple[int, int]]:
-    graph_fa = AdjacencyMatrixFA(graph_to_nfa(graph, start_nodes, final_nodes))
-    regex_fa = AdjacencyMatrixFA(regex_to_dfa(regex))
-
-    starts = sorted(graph_fa.start_states)
+def ms_bfs(
+    graph_fa: AdjacencyMatrixFA, pattern_fa: AdjacencyMatrixFA, starts: list[int]
+) -> csr_array:
     n = graph_fa.states_count
-    k = regex_fa.states_count
+    k = pattern_fa.states_count
     if not starts or k == 0:
-        return set()
+        return csr_array((len(starts) * k, n), dtype=bool)
 
     rows, cols = [], []
     for i, graph_start in enumerate(starts):
-        for regex_start in regex_fa.start_states:
-            rows.append(i * k + regex_start)
+        for pattern_start in pattern_fa.start_states:
+            rows.append(i * k + pattern_start)
             cols.append(graph_start)
     front = csr_array(
         (np.ones(len(rows), dtype=bool), (rows, cols)),
@@ -29,30 +25,42 @@ def ms_bfs_based_rpq(
         dtype=bool,
     )
 
-    # Applying the regex transition for every start-node block at once:
+    # Applying the pattern transition for every start-node block at once:
     # row (i, q) of the front moves to row (i, q') iff q -a-> q'.
     steps = [
         (
             csr_array(
                 kron(
                     eye_array(len(starts), dtype=bool),
-                    regex_fa.matrices[symbol].T,
+                    pattern_fa.matrices[symbol].T,
                     "csr",
                 ),
                 dtype=bool,
             ),
             graph_fa.matrices[symbol],
         )
-        for symbol in regex_fa.matrices.keys() & graph_fa.matrices.keys()
+        for symbol in pattern_fa.matrices.keys() & graph_fa.matrices.keys()
     ]
 
     visited = front
     while front.nnz > 0:
         next_front = csr_array(front.shape, dtype=bool)
-        for regex_step, graph_step in steps:
-            next_front = next_front + regex_step @ (front @ graph_step)
+        for pattern_step, graph_step in steps:
+            next_front = next_front + pattern_step @ (front @ graph_step)
         front = next_front > visited
         visited = visited + front
+    return visited
+
+
+def ms_bfs_based_rpq(
+    regex: str, graph: MultiDiGraph, start_nodes: set[int], final_nodes: set[int]
+) -> set[tuple[int, int]]:
+    graph_fa = AdjacencyMatrixFA(graph_to_nfa(graph, start_nodes, final_nodes))
+    regex_fa = AdjacencyMatrixFA(regex_to_dfa(regex))
+
+    starts = sorted(graph_fa.start_states)
+    k = regex_fa.states_count
+    visited = ms_bfs(graph_fa, regex_fa, starts)
 
     result = set()
     visited_rows, visited_cols = visited.nonzero()
