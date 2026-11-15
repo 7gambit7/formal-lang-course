@@ -3,46 +3,46 @@ from itertools import product
 
 import networkx as nx
 from pyformlang.cfg import CFG
-from pyformlang.finite_automaton import NondeterministicFiniteAutomaton, State, Symbol
+from pyformlang.finite_automaton import (
+    Epsilon,
+    EpsilonNFA,
+    NondeterministicFiniteAutomaton,
+    State,
+    Symbol,
+)
 from pyformlang.rsa import Box, RecursiveAutomaton
 from scipy.sparse import csr_array
 
 from project.adjacency_matrix_fa import AdjacencyMatrixFA, intersect_automata
-from project.finite_automata import graph_to_nfa, regex_to_dfa
-
-
-def _rules_to_rsm(rules: dict[str, list[str]], start: str) -> RecursiveAutomaton:
-    """Make one box per nonterminal: a DFA for "regex1 | regex2 | ..."."""
-    boxes = {
-        Box(regex_to_dfa(" | ".join(f"({r})" for r in regexes)), Symbol(head))
-        for head, regexes in rules.items()
-    }
-    if start not in rules:
-        # No rules for the start symbol, so it derives nothing.
-        boxes.add(Box(NondeterministicFiniteAutomaton(), Symbol(start)))
-    return RecursiveAutomaton(initial_label=Symbol(start), boxes=boxes)
+from project.finite_automata import graph_to_nfa
 
 
 def cfg_to_rsm(cfg: CFG) -> RecursiveAutomaton:
-    """Each rule `A -> X Y Z` becomes the regex `X Y Z` in the box of A."""
-    rules: dict[str, list[str]] = defaultdict(list)
-    for rule in cfg.productions:
-        body = " ".join(str(symbol.value) for symbol in rule.body)
-        rules[str(rule.head.value)].append(body or "$")
+    """Rule `A -> X Y Z` becomes the path X, Y, Z in the box of A."""
+    automata: dict[str, EpsilonNFA] = defaultdict(EpsilonNFA)
+    for i, rule in enumerate(cfg.productions):
+        enfa = automata[rule.head.value]
+        states = [State(("start",))]
+        states += [State((i, k)) for k in range(1, len(rule.body))]
+        states.append(State(("final",)))
+        enfa.add_start_state(states[0])
+        enfa.add_final_state(states[-1])
+        if not rule.body:
+            enfa.add_transition(states[0], Epsilon(), states[-1])
+        for source, symbol, target in zip(states, rule.body, states[1:]):
+            enfa.add_transition(source, Symbol(symbol.value), target)
+
     start = cfg.start_symbol.value if cfg.start_symbol is not None else "S"
-    return _rules_to_rsm(rules, str(start))
+    automata.setdefault(start, EpsilonNFA())  # start may have no rules
+    return RecursiveAutomaton(
+        initial_label=Symbol(start),
+        boxes={Box(enfa.minimize(), Symbol(head)) for head, enfa in automata.items()},
+    )
 
 
 def ebnf_to_rsm(ebnf: str) -> RecursiveAutomaton:
-    """Read lines like `A -> regex`. Start symbol is S (or the first head)."""
-    rules: dict[str, list[str]] = defaultdict(list)
-    for line in ebnf.splitlines():
-        if "->" not in line:
-            continue
-        head, body = (part.strip() for part in line.split("->", 1))
-        rules[head].append(body or "$")
-    start = "S" if "S" in rules or not rules else next(iter(rules))
-    return _rules_to_rsm(rules, start)
+    """Lines `A -> regex`, start symbol S."""
+    return RecursiveAutomaton.from_text(ebnf)
 
 
 class _RsmMatrices:

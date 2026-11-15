@@ -87,12 +87,6 @@ def test_ebnf_rules_split_over_lines() -> None:
     }
 
 
-def test_ebnf_without_s_starts_from_first_rule() -> None:
-    rsm = ebnf_to_rsm("A -> a B\nB -> b")
-    assert rsm.initial_label.value == "A"
-    assert tensor_based_cfpq(rsm, graph_of("0a1 1b2")) == {(0, 2)}
-
-
 def test_empty_cfg() -> None:
     assert tensor_based_cfpq(cfg_to_rsm(CFG()), graph_of(TWO_CYCLES)) == set()
 
